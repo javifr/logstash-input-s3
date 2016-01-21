@@ -36,6 +36,9 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
   # If specified, the prefix of filenames in the bucket must match (not a regexp)
   config :prefix, :validate => :string, :default => nil
 
+  # Once in the prefixed folder filter based on a glob regexp
+  config :namespace, :validate => :string, :default => "*"
+
   # Where to write the since database (keeps track of the date
   # the last handled file was added to S3). The default will write
   # sincedb files to some path matching "$HOME/.sincedb*"
@@ -110,15 +113,19 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
     @s3bucket.objects.with_prefix(@prefix).each do |log|
       @logger.debug("S3 input: Found key", :key => log.key)
 
-      unless ignore_filename?(log.key)
+      unless ignore_filename?(log.key) || !File.fnmatch(@namespace, log.key)
         if sincedb.newer?(log.last_modified)
           objects[log.key] = log.last_modified
           @logger.debug("S3 input: Adding to objects[]", :key => log.key)
         end
       end
     end
+
+    # return filter_files(folder)
     return objects.keys.sort {|a,b| objects[a] <=> objects[b]}
+
   end # def fetch_new_files
+
 
   public
   def backup_to_bucket(object, key)
@@ -153,10 +160,14 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
     end
   end # def process_files
 
+
+
+
+
   public
   def stop
-    # @current_thread is initialized in the `#run` method, 
-    # this variable is needed because the `#stop` is a called in another thread 
+    # @current_thread is initialized in the `#run` method,
+    # this variable is needed because the `#stop` is a called in another thread
     # than the `#run` method and requiring us to call stop! with a explicit thread.
     Stud.stop!(@current_thread)
   end
@@ -235,7 +246,7 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
     line.start_with?('#Fields: ')
   end
 
-  private 
+  private
   def update_metadata(metadata, event)
     line = event['message'].strip
 
@@ -250,7 +261,7 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
 
   private
   def read_file(filename, &block)
-    if gzip?(filename) 
+    if gzip?(filename)
       read_gzip_file(filename, block)
     else
       read_plain_file(filename, block)
@@ -279,9 +290,9 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
   def gzip?(filename)
     filename.end_with?('.gz')
   end
-  
+
   private
-  def sincedb 
+  def sincedb
     @sincedb ||= if @sincedb_path.nil?
                     @logger.info("Using default generated file for the sincedb", :filename => sincedb_file)
                     SinceDB::File.new(sincedb_file)
@@ -317,7 +328,7 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
     object = @s3bucket.objects[key]
 
     filename = File.join(temporary_directory, File.basename(key))
-    
+
     if download_remote_file(object, filename)
       if process_local_log(queue, filename)
         lastmod = object.last_modified
