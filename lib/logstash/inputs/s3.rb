@@ -36,6 +36,9 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
   # If specified, the prefix of filenames in the bucket must match (not a regexp)
   config :prefix, :validate => :string, :default => nil
 
+  # Once in the prefixed folder filter based on a glob regexp
+  config :namespace, :validate => :string, :default => "*"
+
   # Where to write the since database (keeps track of the date
   # the last handled file was added to S3). The default will write
   # sincedb files to some path matching "$HOME/.sincedb*"
@@ -109,7 +112,7 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
     @s3bucket.objects.with_prefix(@prefix).each do |log|
       @logger.debug("S3 input: Found key", :key => log.key)
 
-      unless ignore_filename?(log.key)
+      unless ignore_filename?(log.key) || !File.fnmatch(@namespace, log.key)
         if sincedb.newer?(log.last_modified)
           objects[log.key] = log.last_modified
           @logger.debug("S3 input: Adding to objects[]", :key => log.key)
@@ -214,7 +217,7 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
     line.start_with?('#Fields: ')
   end
 
-  private 
+  private
   def update_metadata(metadata, event)
     line = event['message'].strip
 
@@ -229,7 +232,7 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
 
   private
   def read_file(filename, &block)
-    if gzip?(filename) 
+    if gzip?(filename)
       read_gzip_file(filename, block)
     else
       read_plain_file(filename, block)
@@ -258,9 +261,9 @@ class LogStash::Inputs::S3 < LogStash::Inputs::Base
   def gzip?(filename)
     filename.end_with?('.gz')
   end
-  
+
   private
-  def sincedb 
+  def sincedb
     @sincedb ||= if @sincedb_path.nil?
                     @logger.info("Using default generated file for the sincedb", :filename => sincedb_file)
                     SinceDB::File.new(sincedb_file)
